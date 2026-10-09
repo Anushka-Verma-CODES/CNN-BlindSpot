@@ -8,7 +8,7 @@ class SimpleMLP(nn.Module):
 
         self.layer1 = nn.Linear(input_dim, hidden_dim)
         self.relu1 = nn.ReLU()
-        self.dropout1 == nn.Dropout(p=dropout_rate)
+        self.dropout1 = nn.Dropout(p=dropout_rate)
 
         self.layer2 = nn.Linear(hidden_dim, 32)
         self.relu2 = nn.ReLU()
@@ -42,4 +42,4 @@ if __name__ == "__main__":
 
     predictions = model(dummy_data)
 
-    print("\n Predictions Shape: ", Predictions.shape)
+    print("\n Predictions Shape: ", predictions.shape)
