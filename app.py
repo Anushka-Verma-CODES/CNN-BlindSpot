@@ -45,7 +45,7 @@ def render_lab():
     target_class_name = categories[target_class_id]
 
     with st.sidebar:
-        st.header("🎮 Mission Log")
+        st.header("Mission Log")
         move_count = len(st.session_state.masked_cells)
         if current_mission:
             st.subheader(f"Mission {current_mission.id}: {current_mission.title}")
@@ -116,7 +116,7 @@ def render_lab():
             is_complete, reason = check_mission_complete(current_mission, orig_score, current_score, move_count)
             if is_complete:
                 st.sidebar.success(reason)
-                if st.sidebar.button("Next Mission ➡️"):
+                if st.sidebar.button("Next Mission"):
                     st.session_state.mission_idx += 1
                     st.session_state.masked_cells.clear()
                     st.rerun()
@@ -129,7 +129,7 @@ def render_lab():
         st.divider()
         st.subheader("AI X-Ray")
         
-        st.info("🧪 **Prediction-Before-Reveal**: Before generating the heatmap, formulate a scientific hypothesis.")
+        st.info("**Prediction-Before-Reveal**: Before generating the heatmap, formulate a scientific hypothesis.")
         hypothesis = st.radio("Which area do you predict is most critical for the 'Samoyed' prediction?", 
                               ["The dog's face/head (Top-Left/Center)", "The dog's body/tail", "The grass/background"], index=None)
                               
@@ -151,14 +151,14 @@ def render_lab():
                 st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
-    st.header("🔬 Experiment Lab")
+    st.header("Experiment Lab")
     st.dataframe(st.session_state.exp_log, use_container_width=True)
     if not st.session_state.exp_log.empty:
         csv_data = convert_df_to_csv(st.session_state.exp_log)
         st.download_button(label="Download CSV", data=csv_data, file_name="cnn_experiment_log.csv", mime="text/csv")
 
 def render_assessment():
-    st.title("🎓 Final Assessment")
+    st.title("Final Assessment")
     st.markdown("Test your knowledge of CNNs and Model Interpretability to complete your training.")
     
     questions = [
@@ -218,7 +218,7 @@ def render_assessment():
         st.header(f"Your Score: {score} / {len(questions)}")
         if score == len(questions):
             st.balloons()
-            st.success("🎉 Congratulations! You have mastered the CNN Blind Spot curriculum!")
+            st.success("Congratulations! You have mastered the CNN Blind Spot curriculum!")
         else:
             st.warning("Review the Learning Academy chapters and try again!")
 

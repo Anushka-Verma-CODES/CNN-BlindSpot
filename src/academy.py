@@ -956,7 +956,7 @@ def chapter_3():
 
     with col3:
         st.write("3. Calculate Feature Map")
-        if st.button("Apply Convolution ➡️"):
+        if st.button("Apply Convolution"):
             output = np.zeros((3, 3))
             for i in range(3):
                 for j in range(3):
@@ -1947,7 +1947,7 @@ def chapter_10():
     st.success("You have finished the core curriculum! You may proceed to the Interactive Lab via the sidebar.")
 
 def render_academy_page(model=None, preprocess=None, categories=None):
-    st.title("📚 Learning Academy")
+    st.title("Learning Academy")
     st.markdown("A structured, interactive textbook to master Deep Learning concepts.")
     
     chapters = {
