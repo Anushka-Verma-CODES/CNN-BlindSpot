@@ -227,7 +227,7 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to:", ["Learning Academy", "Interactive Lab", "Final Assessment"])
 
 if page == "Learning Academy":
-    render_academy_page()
+    render_academy_page(model, preprocess, categories)
 elif page == "Interactive Lab":
     render_lab()
 elif page == "Final Assessment":

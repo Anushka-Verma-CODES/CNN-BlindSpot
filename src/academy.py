@@ -1,10 +1,12 @@
 from functools import partial
+from pathlib import Path
 
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import torch
 from PIL import Image, UnidentifiedImageError
 
 
@@ -28,6 +30,18 @@ def _tensor_cell_style(value):
     return (
         f"background-color: rgb({intensity}, {intensity}, {intensity}); "
         f"color: {text_color};"
+    )
+
+
+def _sigmoid(value):
+    return 1.0 / (1.0 + np.exp(-value))
+
+
+def _binary_cross_entropy(prediction, target):
+    prediction = np.clip(prediction, 1e-7, 1 - 1e-7)
+    return -(
+        target * np.log(prediction)
+        + (1 - target) * np.log(1 - prediction)
     )
 
 
@@ -499,23 +513,407 @@ def chapter_1():
         ], 1, 
         "Normalization keeps numerical values small and stable. Unnormalized inputs cause numerical overflow during deep matrix multiplications.")
 
-def chapter_2():
+def chapter_2(model=None, preprocess=None, categories=None):
     st.header("Chapter 2: What Is a Neural Network?")
+    st.markdown("### 2.1 The Architecture of a Network")
     st.markdown("""
-    ### 2.1 The Architecture of a Network
     A Neural Network is an algorithm loosely inspired by biological brains. It consists of layers of artificial **neurons** (nodes).
     * **Inputs:** The raw data (our image tensor) fed into the first layer.
     * **Weights:** The connections between neurons. You can think of weights as the network's *memory* or *learned rules*. They are just numbers. If a weight is high, the connection is strong.
     * **Activations:** Mathematical gates that decide if a neuron should "fire" and pass data to the next layer based on the sum of its inputs and weights.
-    
-    ### 2.2 Training vs. Inference
+    """)
+    st.markdown("#### Neural Network Playground")
+    st.write(
+        "Change the two inputs, hidden-layer size, or connection weights. "
+        "The diagram and sigmoid activations update together."
+    )
+    playground_controls = st.columns([1, 1, 1])
+    with playground_controls[0]:
+        input_values = np.array(
+            [
+                st.slider("Input x₁", 0.0, 1.0, 0.4, 0.05, key="ch2_play_input_0"),
+                st.slider("Input x₂", 0.0, 1.0, 0.8, 0.05, key="ch2_play_input_1"),
+            ]
+        )
+    with playground_controls[1]:
+        hidden_count = st.slider(
+            "Hidden neurons", 2, 5, 3, key="ch2_play_hidden_count"
+        )
+    with playground_controls[2]:
+        st.markdown("**Output neurons**")
+        st.caption("Two sigmoid output scores")
+
+    input_to_hidden = np.zeros((2, hidden_count))
+    hidden_to_output = np.zeros((hidden_count, 2))
+    weight_controls = st.columns(2)
+    with weight_controls[0]:
+        with st.expander("Adjust input → hidden weights", expanded=False):
+            for hidden_index in range(hidden_count):
+                cols = st.columns(2)
+                for input_index in range(2):
+                    input_to_hidden[input_index, hidden_index] = cols[
+                        input_index
+                    ].slider(
+                        f"x{input_index + 1} → h{hidden_index + 1}",
+                        -3.0,
+                        3.0,
+                        0.6 if input_index == hidden_index % 2 else -0.4,
+                        0.1,
+                        key=f"ch2_play_w_ih_{input_index}_{hidden_index}",
+                    )
+    with weight_controls[1]:
+        with st.expander("Adjust hidden → output weights", expanded=False):
+            for hidden_index in range(hidden_count):
+                cols = st.columns(2)
+                for output_index in range(2):
+                    hidden_to_output[hidden_index, output_index] = cols[
+                        output_index
+                    ].slider(
+                        f"h{hidden_index + 1} → y{output_index + 1}",
+                        -3.0,
+                        3.0,
+                        0.7 if output_index == hidden_index % 2 else -0.3,
+                        0.1,
+                        key=f"ch2_play_w_ho_{hidden_index}_{output_index}",
+                    )
+
+    hidden_activations = _sigmoid(input_values @ input_to_hidden)
+    output_activations = _sigmoid(hidden_activations @ hidden_to_output)
+    st.write(
+        "**Hidden activations:** "
+        + " · ".join(f"h{i + 1} = {value:.3f}" for i, value in enumerate(hidden_activations))
+    )
+    st.write(
+        "**Output activations:** "
+        + " · ".join(f"y{i + 1} = {value:.3f}" for i, value in enumerate(output_activations))
+    )
+
+    network_figure = go.Figure()
+    node_layers = [
+        (0, input_values, "Input", "#38bdf8"),
+        (1, hidden_activations, "Hidden", "#a78bfa"),
+        (2, output_activations, "Output", "#34d399"),
+    ]
+    for input_index in range(2):
+        for hidden_index in range(hidden_count):
+            weight = input_to_hidden[input_index, hidden_index]
+            network_figure.add_trace(
+                go.Scatter(
+                    x=[0, 1],
+                    y=[
+                        -(input_index - 0.5),
+                        (hidden_count - 1) / 2 - hidden_index,
+                    ],
+                    mode="lines+markers",
+                    line={
+                        "color": "#38bdf8" if weight >= 0 else "#fb7185",
+                        "width": 1 + abs(weight) * 1.5,
+                    },
+                    marker={"size": [0, 0]},
+                    text=[f"Weight: {weight:+.1f}"] * 2,
+                    hovertemplate="%{text}<extra>Input → Hidden</extra>",
+                    showlegend=False,
+                )
+            )
+    for hidden_index in range(hidden_count):
+        for output_index in range(2):
+            weight = hidden_to_output[hidden_index, output_index]
+            network_figure.add_trace(
+                go.Scatter(
+                    x=[1, 2],
+                    y=[
+                        (hidden_count - 1) / 2 - hidden_index,
+                        -(output_index - 0.5),
+                    ],
+                    mode="lines+markers",
+                    line={
+                        "color": "#38bdf8" if weight >= 0 else "#fb7185",
+                        "width": 1 + abs(weight) * 1.5,
+                    },
+                    marker={"size": [0, 0]},
+                    text=[f"Weight: {weight:+.1f}"] * 2,
+                    hovertemplate="%{text}<extra>Hidden → Output</extra>",
+                    showlegend=False,
+                )
+            )
+    for x_position, activations, layer_name, color in node_layers:
+        layer_y = (
+            [-(index - 0.5) for index in range(2)]
+            if layer_name != "Hidden"
+            else [(hidden_count - 1) / 2 - index for index in range(hidden_count)]
+        )
+        network_figure.add_trace(
+            go.Scatter(
+                x=[x_position] * len(activations),
+                y=layer_y,
+                mode="markers+text",
+                text=[f"{layer_name[0]}{index + 1}: {value:.2f}" for index, value in enumerate(activations)],
+                textposition="middle right",
+                marker={
+                    "size": 36,
+                    "color": color,
+                    "line": {"color": "#e5e7eb", "width": 1},
+                },
+                hovertemplate="%{text}<extra></extra>",
+                showlegend=False,
+            )
+        )
+    network_figure.update_layout(
+        height=430,
+        margin={"l": 30, "r": 80, "t": 35, "b": 20},
+        xaxis={
+            "tickvals": [0, 1, 2],
+            "ticktext": ["Input", "Hidden", "Output"],
+            "range": [-0.35, 2.5],
+            "showgrid": False,
+            "zeroline": False,
+        },
+        yaxis={"visible": False, "range": [-max(hidden_count, 2), max(hidden_count, 2)]},
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        transition={"duration": 250},
+        showlegend=False,
+    )
+    st.plotly_chart(network_figure, width="stretch", key="ch2_network_playground")
+
+    render_knowledge_check(
+        "ch2_q1",
+        "In this network, what does a connection weight control?",
+        [
+            "How strongly one neuron's activation influences the next layer.",
+            "The number of pixels in the input image.",
+            "Whether the model downloads its weights.",
+        ],
+        0,
+        "A weight scales a signal as it travels between neurons; changing it changes the next layer's weighted sum and activation.",
+    )
+
+    st.markdown("### 2.2 Training vs. Inference")
+    st.markdown("""
     * **Training (The Backward Pass):** The network starts completely ignorant. We feed it an image of a dog, and it guesses randomly. We calculate how wrong it was (the *Loss*), and use calculus (*Backpropagation*) to update the **weights** so it guesses slightly better next time. This requires millions of images and massive GPU compute power.
     * **Inference (The Forward Pass):** Once the network is highly accurate, we "freeze" its weights. It stops learning. We give it new images and it applies its frozen weights to make a prediction. This requires much less computing power.
-    
-    ### 2.3 Pretrained Models
+    """)
+    st.markdown("#### Training vs. Inference Simulator")
+    simulator_mode = st.radio(
+        "Network mode",
+        ["Training", "Inference (frozen weights)"],
+        horizontal=True,
+        key="ch2_simulator_mode",
+    )
+    st.caption(
+        "A tiny two-input, one-output sigmoid neuron keeps each forward and backward "
+        "calculation visible; its weights are separate from the pretrained model."
+    )
+    st.session_state.setdefault("ch2_sim_weights", [0.2, -0.2])
+    st.session_state.setdefault("ch2_sim_bias", 0.0)
+    sim_controls = st.columns(3)
+    with sim_controls[0]:
+        sim_inputs = np.array(
+            [
+                st.slider("Feature x₁", 0.0, 1.0, 0.8, 0.05, key="ch2_sim_x1"),
+                st.slider("Feature x₂", 0.0, 1.0, 0.3, 0.05, key="ch2_sim_x2"),
+            ]
+        )
+    with sim_controls[1]:
+        learning_rate = st.slider(
+            "Learning rate",
+            0.05,
+            1.0,
+            0.3,
+            0.05,
+            disabled=simulator_mode != "Training",
+            key="ch2_sim_learning_rate",
+        )
+        if simulator_mode == "Training":
+            target = st.selectbox(
+                "Target label",
+                [0, 1],
+                format_func=lambda value: f"Class {value}",
+                key="ch2_sim_target",
+            )
+        else:
+            st.caption("Target is hidden during inference.")
+            target = None
+    with sim_controls[2]:
+        st.write("**Current weights**")
+        st.write(
+            " · ".join(
+                f"w{i + 1} = {weight:+.3f}"
+                for i, weight in enumerate(st.session_state.ch2_sim_weights)
+            )
+            + f" · b = {st.session_state.ch2_sim_bias:+.3f}"
+        )
+        if st.button("Reset demo weights", key="ch2_sim_reset"):
+            st.session_state.ch2_sim_weights = [0.2, -0.2]
+            st.session_state.ch2_sim_bias = 0.0
+            st.rerun()
+
+    sim_weights = np.asarray(st.session_state.ch2_sim_weights, dtype=float)
+    sim_bias = float(st.session_state.ch2_sim_bias)
+    sim_logit = float(sim_inputs @ sim_weights + sim_bias)
+    sim_prediction = float(_sigmoid(sim_logit))
+    if simulator_mode == "Training":
+        sim_loss = float(_binary_cross_entropy(sim_prediction, target))
+        st.write(
+            f"**Forward pass:** sigmoid({sim_logit:.3f}) = **{sim_prediction:.3f}**"
+            f" &nbsp; · &nbsp; **Binary cross-entropy loss:** `{sim_loss:.4f}`"
+        )
+        if st.button("Backpropagate and update weights", type="primary", key="ch2_sim_train"):
+            gradients = (sim_prediction - target) * sim_inputs
+            bias_gradient = sim_prediction - target
+            updated_weights = sim_weights - learning_rate * gradients
+            updated_bias = sim_bias - learning_rate * bias_gradient
+            updated_prediction = float(_sigmoid(float(sim_inputs @ updated_weights + updated_bias)))
+            updated_loss = float(_binary_cross_entropy(updated_prediction, target))
+            st.session_state.ch2_sim_weights = updated_weights.tolist()
+            st.session_state.ch2_sim_bias = float(updated_bias)
+            st.session_state.ch2_sim_last_update = {
+                "before_prediction": sim_prediction,
+                "after_prediction": updated_prediction,
+                "before_loss": sim_loss,
+                "after_loss": updated_loss,
+                "weight_gradients": gradients.tolist(),
+                "bias_gradient": bias_gradient,
+            }
+            st.rerun()
+        if "ch2_sim_last_update" in st.session_state:
+            update = st.session_state.ch2_sim_last_update
+            st.success(
+                f"Backpropagation updated weights. Prediction: "
+                f"{update['before_prediction']:.3f} → "
+                f"{update['after_prediction']:.3f}; loss: "
+                f"{update['before_loss']:.4f} → {update['after_loss']:.4f}."
+            )
+            st.caption(
+                "Gradients: "
+                + ", ".join(
+                    f"∂L/∂w{i + 1} = {gradient:+.4f}"
+                    for i, gradient in enumerate(update["weight_gradients"])
+                )
+                + f", ∂L/∂b = {update['bias_gradient']:+.4f}."
+            )
+    else:
+        if st.button("Run forward pass (weights frozen)", key="ch2_sim_infer"):
+            st.session_state.ch2_sim_last_inference = {
+                "prediction": sim_prediction,
+                "weights": sim_weights.tolist(),
+                "bias": sim_bias,
+                "inputs": sim_inputs.tolist(),
+            }
+        st.info(
+            f"**Forward pass:** sigmoid({sim_logit:.3f}) = "
+            f"**{sim_prediction:.3f}**. Weights and bias are frozen; "
+            "backpropagation is disabled in inference mode."
+        )
+        if "ch2_sim_last_inference" in st.session_state:
+            st.caption(
+                f"Last inference prediction: "
+                f"{st.session_state.ch2_sim_last_inference['prediction']:.3f}. "
+                "No parameters were updated."
+            )
+
+    render_knowledge_check(
+        "ch2_q2",
+        "Which operation changes weights during training?",
+        [
+            "Running a forward pass in inference mode.",
+            "Backpropagating the loss gradient and applying a weight update.",
+            "Displaying the network diagram.",
+        ],
+        1,
+        "Training computes the loss gradient with respect to each weight and updates parameters; inference only uses the current frozen weights.",
+    )
+
+    st.markdown("### 2.3 Pretrained Models")
+    st.markdown("""
     In this application, we use a **pretrained model**. We did not train it ourselves. We downloaded the frozen weights from PyTorch. Because we are only doing *inference*, the model runs easily on a standard CPU.
     """)
-    render_knowledge_check("ch2_q1", "When you mask part of the image in the lab, is the network learning to recognize the grey box?", 
+    st.markdown("#### Pretrained Model Lab")
+    if model is None or preprocess is None or categories is None:
+        st.info(
+            "The pretrained model is available from the main application. "
+            "Open Chapter 2 from the running app to try image inference."
+        )
+    else:
+        sample_dir = Path(__file__).resolve().parent.parent / "assets" / "images"
+        image_options = {
+            "Dog (original)": sample_dir / "dog.jpg",
+            "Dog (masked)": sample_dir / "dog_masked_test.jpg",
+        }
+        available_images = {
+            label: path for label, path in image_options.items() if path.is_file()
+        }
+        if not available_images:
+            st.warning("No sample images were found in assets/images.")
+        else:
+            selected_sample = st.selectbox(
+                "Sample image",
+                list(available_images),
+                key="ch2_pretrained_sample",
+            )
+            sample_path = available_images[selected_sample]
+            with Image.open(sample_path) as sample_image:
+                sample_image = sample_image.convert("RGB")
+            st.image(
+                sample_image,
+                caption=selected_sample,
+                width=280,
+            )
+            st.markdown(
+                "**Pipeline:** `sample image` → `preprocessed tensor` "
+                "→ `pretrained MobileNetV2` → `top predictions`"
+            )
+            if st.button(
+                "Run pretrained inference",
+                type="primary",
+                key="ch2_pretrained_run",
+            ):
+                input_tensor = preprocess(sample_image).unsqueeze(0)
+                with torch.inference_mode():
+                    logits = model(input_tensor)
+                    probabilities = torch.nn.functional.softmax(logits[0], dim=0)
+                    top_probabilities, top_indices = torch.topk(probabilities, 5)
+                st.session_state.ch2_pretrained_result = {
+                    "sample": selected_sample,
+                    "tensor_shape": tuple(input_tensor.shape),
+                    "predictions": [
+                        (
+                            categories[int(index)],
+                            float(probability),
+                        )
+                        for probability, index in zip(
+                            top_probabilities.tolist(), top_indices.tolist()
+                        )
+                    ],
+                }
+            result = st.session_state.get("ch2_pretrained_result")
+            if result and result["sample"] == selected_sample:
+                st.caption(
+                    f"Tensor shape: `{result['tensor_shape']}` "
+                    "(batch, channels, height, width)."
+                )
+                prediction_columns = st.columns(5)
+                for index, (label, confidence) in enumerate(result["predictions"]):
+                    prediction_columns[index].metric(
+                        f"Top {index + 1}",
+                        label,
+                        f"{confidence:.1%}",
+                    )
+                    prediction_columns[index].progress(confidence)
+
+    render_knowledge_check(
+        "ch2_q3",
+        "What does a pretrained model bring to this inference lab?",
+        [
+            "Weights already learned from a large training dataset.",
+            "A guarantee that every prediction is correct.",
+            "A new set of weights trained whenever an image is uploaded.",
+        ],
+        0,
+        "The pretrained MobileNetV2 starts with learned weights; this lab runs inference and does not train or update that model.",
+    )
+
+    render_knowledge_check("ch2_occlusion_q", "When you mask part of the image in the lab, is the network learning to recognize the grey box?",
         [
             "Yes, the network's weights are updating to learn about occlusion.", 
             "No, the weights are frozen. We are only running inference to see how the already-trained model reacts."
@@ -720,13 +1118,17 @@ def chapter_10():
     """)
     st.success("You have finished the core curriculum! You may proceed to the Interactive Lab via the sidebar.")
 
-def render_academy_page():
+def render_academy_page(model=None, preprocess=None, categories=None):
     st.title("📚 Learning Academy")
     st.markdown("A structured, interactive textbook to master Deep Learning concepts.")
     
     chapters = {
         "1. How a Computer Sees an Image": chapter_1,
-        "2. What Is a Neural Network?": chapter_2,
+        "2. What Is a Neural Network?": lambda: chapter_2(
+            model=model,
+            preprocess=preprocess,
+            categories=categories,
+        ),
         "3. Understanding CNNs": chapter_3,
         "4. Image Classification": chapter_4,
         "5. Meet MobileNetV2": chapter_5,
