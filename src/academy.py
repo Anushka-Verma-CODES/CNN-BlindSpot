@@ -45,6 +45,12 @@ def _binary_cross_entropy(prediction, target):
     )
 
 
+def _softmax(logits):
+    shifted_logits = np.asarray(logits, dtype=np.float64) - np.max(logits)
+    exponentials = np.exp(shifted_logits)
+    return exponentials / exponentials.sum()
+
+
 def _render_tensor_matrix(
     tensor_channel,
     channel_label,
@@ -975,13 +981,123 @@ def chapter_3():
 
 def chapter_4():
     st.header("Chapter 4: How Image Classification Works")
+    st.markdown("### 4.1 From Feature Maps to Logits")
     st.markdown("""
-    ### 4.1 From Feature Maps to Logits
     After the image passes through dozens of convolutional and pooling layers, the final feature maps are flattened and passed to a **Classification Head** (standard dense layers). 
     
     This final layer outputs a raw list of numbers called **logits**. Our model outputs exactly 1,000 logits—one for every object category it knows.
-    
-    ### 4.2 The Softmax Function
+    """)
+    st.markdown("#### Interactive Classification Pipeline")
+    st.write(
+        "Select each stage to follow a compact, calculated example from feature "
+        "activations to a predicted class."
+    )
+    pipeline_controls = st.columns(3)
+    with pipeline_controls[0]:
+        channel_count = st.slider(
+            "Feature-map channels", 1, 3, 2, key="ch4_pipeline_channels"
+        )
+    with pipeline_controls[1]:
+        feature_side = st.slider(
+            "Feature-map width/height", 2, 4, 2, key="ch4_pipeline_side"
+        )
+    with pipeline_controls[2]:
+        feature_scale = st.slider(
+            "Input feature strength", 0.2, 1.0, 0.6, 0.1, key="ch4_pipeline_scale"
+        )
+
+    feature_base = np.arange(
+        1, channel_count * feature_side * feature_side + 1, dtype=np.float64
+    ).reshape(channel_count, feature_side, feature_side)
+    feature_maps = feature_base * feature_scale / feature_base.max()
+    flattened = feature_maps.reshape(-1)
+    classifier_weights = np.linspace(
+        -0.8, 0.9, flattened.size * 3, dtype=np.float64
+    ).reshape(flattened.size, 3)
+    classifier_bias = np.array([-0.15, 0.05, 0.1], dtype=np.float64)
+    pipeline_logits = flattened @ classifier_weights + classifier_bias
+    pipeline_probabilities = _softmax(pipeline_logits)
+    pipeline_classes = ["Cat", "Dog", "Car"]
+    pipeline_prediction_index = int(np.argmax(pipeline_probabilities))
+    pipeline_stages = [
+        "Feature Maps",
+        "Flatten",
+        "Classification Head",
+        "Logits",
+        "Softmax",
+        "Prediction",
+    ]
+    stage_descriptions = {
+        "Feature Maps": (
+            "Convolutional layers produce one spatial activation map per channel.",
+            feature_maps,
+        ),
+        "Flatten": (
+            "The channel and spatial axes are reshaped into one feature vector.",
+            flattened,
+        ),
+        "Classification Head": (
+            "A learned linear layer multiplies features by weights and adds bias.",
+            classifier_weights,
+        ),
+        "Logits": (
+            "The classification head emits one unnormalized score per class.",
+            pipeline_logits,
+        ),
+        "Softmax": (
+            "Softmax converts the three logits into probabilities that sum to 1.",
+            pipeline_probabilities,
+        ),
+        "Prediction": (
+            "The class with the highest softmax probability is selected.",
+            np.array([pipeline_classes[pipeline_prediction_index]]),
+        ),
+    }
+    pipeline_columns = st.columns(6)
+    for stage_column, stage in zip(pipeline_columns, pipeline_stages):
+        if stage_column.button(
+            stage,
+            key=f"ch4_pipeline_stage_{stage}",
+            type=(
+                "primary"
+                if st.session_state.get("ch4_pipeline_selected", "Feature Maps") == stage
+                else "secondary"
+            ),
+            width="stretch",
+        ):
+            st.session_state.ch4_pipeline_selected = stage
+    selected_stage = st.session_state.get("ch4_pipeline_selected", "Feature Maps")
+    stage_description, stage_values = stage_descriptions[selected_stage]
+    stage_shape = "class label" if selected_stage == "Prediction" else str(stage_values.shape)
+    stage_preview = (
+        str(stage_values[0])
+        if selected_stage == "Prediction"
+        else np.array2string(stage_values, precision=3, threshold=8, edgeitems=3)
+    )
+    st.markdown(f"**{selected_stage}** · tensor shape `{stage_shape}`")
+    st.write(stage_description)
+    st.code(stage_preview, language="text")
+    st.progress(
+        (pipeline_stages.index(selected_stage) + 1) / len(pipeline_stages),
+        text=(
+            f"Pipeline stage {pipeline_stages.index(selected_stage) + 1} "
+            f"of {len(pipeline_stages)}"
+        ),
+    )
+    render_knowledge_check(
+        "ch4_pipeline_q",
+        "What happens when feature maps are flattened?",
+        [
+            "Their values are reshaped into a vector for the classification head.",
+            "All activations are converted to class probabilities.",
+            "The model updates its learned weights.",
+        ],
+        0,
+        "Flattening preserves activation values while arranging them in one vector that can be passed to a dense classification head.",
+    )
+
+    st.markdown("### 4.2 The Softmax Function")
+    st.markdown("""
     Logits are just unbounded numbers (e.g., `14.5` or `-2.1`). To make them readable, we pass them through the **Softmax** formula:
     
     $$\sigma(z_i) = \\frac{e^{z_i}}{\\sum_{j=1}^K e^{z_j}}$$
@@ -991,32 +1107,744 @@ def chapter_4():
     2. It forces all 1,000 numbers to add up to exactly `1.0` (or 100%).
     
     These are our **Probability Scores**. We usually only care about the **Top-K** (e.g., Top 3 highest scores).
-    
-    ### 4.3 Confidence vs. Correctness
+    """)
+    st.markdown("#### Softmax Playground")
+    st.write("Adjust each raw logit and see how the probability distribution responds.")
+    class_names = ["Cat", "Dog", "Car"]
+    logits = []
+    logit_columns = st.columns(3)
+    for column, class_name, initial in zip(
+        logit_columns, class_names, [1.2, 0.4, -0.3]
+    ):
+        logits.append(
+            column.slider(
+                f"{class_name} logit",
+                -5.0,
+                5.0,
+                initial,
+                0.1,
+                key=f"ch4_logit_{class_name.lower()}",
+            )
+        )
+    probabilities = _softmax(logits)
+    prediction_index = int(np.argmax(probabilities))
+    probability_percentages = probabilities * 100
+    st.caption(
+        f"Probability total: **{probability_percentages.sum():.2f}%** "
+        "(displayed total may differ slightly due to rounding)."
+    )
+    probability_figure = go.Figure(
+        go.Bar(
+            x=probability_percentages,
+            y=class_names,
+            orientation="h",
+            marker={
+                "color": [
+                    "#34d399" if index == prediction_index else "#38bdf8"
+                    for index in range(len(class_names))
+                ],
+                "line": {
+                    "color": [
+                        "#facc15" if index == prediction_index else "#334155"
+                        for index in range(len(class_names))
+                    ],
+                    "width": [
+                        3 if index == prediction_index else 1
+                        for index in range(len(class_names))
+                    ],
+                },
+            },
+            text=[f"{value:.2f}%" for value in probability_percentages],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}: %{x:.3f}%<extra></extra>",
+        )
+    )
+    probability_figure.update_layout(
+        xaxis={"title": "Probability", "range": [0, 110], "ticksuffix": "%"},
+        yaxis={"title": None, "autorange": "reversed"},
+        height=300,
+        margin={"l": 10, "r": 60, "t": 15, "b": 40},
+        transition={"duration": 350},
+        uirevision="ch4-softmax",
+    )
+    st.plotly_chart(
+        probability_figure,
+        width="stretch",
+        key="ch4_softmax_probabilities",
+    )
+    st.success(
+        f"Predicted class: **{class_names[prediction_index]}** "
+        f"({probability_percentages[prediction_index]:.2f}%)"
+    )
+    st.markdown("#### Top-K Prediction Explorer")
+    top_k_mode = st.radio(
+        "Show predictions",
+        ["Top-1", "Top-3"],
+        horizontal=True,
+        key="ch4_top_k_mode",
+    )
+    ranked_indices = np.argsort(probabilities)[::-1][
+        : 1 if top_k_mode == "Top-1" else 3
+    ]
+    prediction_columns = st.columns(len(ranked_indices))
+    for rank, (column, class_index) in enumerate(
+        zip(prediction_columns, ranked_indices), start=1
+    ):
+        column.metric(
+            f"Top {rank}: {class_names[class_index]}",
+            f"{probability_percentages[class_index]:.2f}%",
+            "Predicted" if rank == 1 else None,
+        )
+        column.progress(
+            float(probabilities[class_index]),
+            text=f"Confidence {probability_percentages[class_index]:.2f}%",
+        )
+    render_knowledge_check(
+        "ch4_softmax_q",
+        "What does softmax guarantee about the probabilities?",
+        [
+            "They sum to 100%, but the top class is not guaranteed to be correct.",
+            "The top class is always the true class.",
+            "Every class receives the same probability.",
+        ],
+        0,
+        "Softmax creates a distribution summing to 100%; it does not establish whether a prediction is correct.",
+    )
+
+    st.markdown("### 4.3 Confidence vs. Correctness")
+    st.markdown("""
     If the model outputs 99% for 'Samoyed', it means the model's math is highly *confident*. **Confidence is not accuracy.** If you feed the model a picture of a spaceship (which it was never trained on), it might output 99% confidence for "Car" simply because it has wheels!
     """)
+    st.markdown("#### Confidence vs. Correctness Challenge")
+    challenge_examples = {
+        "A dog photo predicted as “Dog”": {
+            "prediction": "Dog",
+            "confidence": 0.72,
+            "truth": "Dog",
+            "explanation": "This prediction happens to match the image label. The 72% score describes model confidence; correctness comes from comparing against the actual label.",
+        },
+        "A spaceship photo predicted as “Car”": {
+            "prediction": "Car",
+            "confidence": 0.99,
+            "truth": "Spaceship",
+            "explanation": "The model is highly confident but wrong: confidence is the model's score, not proof that the class is correct.",
+        },
+        "A cat photo predicted as “Dog”": {
+            "prediction": "Dog",
+            "confidence": 0.54,
+            "truth": "Cat",
+            "explanation": "The prediction does not match the cat image label. A confidence percentage alone cannot tell us whether it is correct.",
+        },
+    }
+    challenge_case = st.selectbox(
+        "Choose a sample prediction",
+        list(challenge_examples),
+        key="ch4_challenge_case",
+    )
+    example = challenge_examples[challenge_case]
+    st.info(
+        f"Model prediction: **{example['prediction']}** "
+        f"({example['confidence']:.0%} confidence). Is it correct?"
+    )
+    answer = st.radio(
+        "Your answer",
+        ["Correct", "Incorrect"],
+        horizontal=True,
+        index=None,
+        key="ch4_challenge_answer",
+    )
+    if st.button("Check answer", key="ch4_challenge_submit", disabled=answer is None):
+        is_correct = example["prediction"] == example["truth"]
+        expected_answer = "Correct" if is_correct else "Incorrect"
+        if answer == expected_answer:
+            st.success("That's right! " + example["explanation"])
+        else:
+            st.error(
+                f"Not quite—the correct answer is **{expected_answer}**. "
+                + example["explanation"]
+            )
+
     render_knowledge_check("ch4_q1", "What does the Softmax function guarantee about the output scores?", 
         ["It guarantees the top prediction is factually correct.", "It guarantees all the output probabilities sum to exactly 100%.", "It removes all predictions below 50%."], 1, 
         "Softmax turns raw logits into a standardized probability distribution summing to 1.0.")
 
-def chapter_5():
+def _render_mobilenet_architecture_explorer(model):
+    st.markdown("#### Interactive Architecture Explorer")
+    if model is None or not hasattr(model, "features"):
+        st.info("The shared pretrained MobileNetV2 is not available in this view.")
+        return
+
+    modules = dict(model.named_modules())
+    feature_layers = [f"features.{index}" for index in range(len(model.features))]
+    layer_names = feature_layers + (["classifier"] if "classifier" in modules else [])
+    layer_labels = {
+        name: (
+            f"Feature stage {name.split('.')[-1]}"
+            if name.startswith("features.")
+            else "Classifier"
+        )
+        for name in layer_names
+    }
+    selected_layer = st.selectbox(
+        "Select a MobileNetV2 stage",
+        layer_names,
+        format_func=lambda name: f"{layer_labels[name]} · {name}",
+        key="ch5_arch_layer",
+    )
+
+    layer = modules[selected_layer]
+    details = []
+    for attribute, label in (
+        ("in_channels", "Input channels"),
+        ("out_channels", "Output channels"),
+        ("kernel_size", "Kernel"),
+        ("stride", "Stride"),
+        ("groups", "Groups"),
+    ):
+        value = getattr(layer, attribute, None)
+        if value is not None:
+            details.append(f"**{label}:** `{value}`")
+    if details:
+        st.caption(" · ".join(details))
+    st.caption(
+        "Inspect runs one zero-image probe through the existing model to capture "
+        "the selected layer's real output shape and activations."
+    )
+    if st.button(
+        "Inspect selected stage",
+        type="primary",
+        key="ch5_arch_inspect",
+    ):
+        captured = {}
+
+        def capture_output(_module, inputs, output):
+            activation = output[0] if isinstance(output, (tuple, list)) else output
+            if not isinstance(activation, torch.Tensor):
+                raise TypeError(
+                    f"{selected_layer} returned {type(activation).__name__}, "
+                    "not a tensor."
+                )
+            captured["input_shape"] = tuple(inputs[0].shape)
+            captured["output_shape"] = tuple(activation.shape)
+            values = activation.detach()
+            if values.ndim == 4:
+                captured["feature_map"] = (
+                    values[0, 0, :32, :32].float().cpu().numpy()
+                )
+                captured["channel_means"] = (
+                    values[0].float().mean(dim=(-2, -1))[:32].cpu().numpy()
+                )
+            else:
+                captured["feature_map"] = None
+                captured["channel_means"] = values.flatten()[:32].float().cpu().numpy()
+
+        hook = layer.register_forward_hook(capture_output)
+        parameter = next(model.parameters())
+        try:
+            probe = torch.zeros(
+                (1, 3, 224, 224),
+                device=parameter.device,
+                dtype=parameter.dtype,
+            )
+            with torch.inference_mode():
+                model(probe)
+        finally:
+            hook.remove()
+        captured["layer"] = selected_layer
+        st.session_state["ch5_arch_capture"] = captured
+
+    captured = st.session_state.get("ch5_arch_capture")
+    if captured and captured["layer"] == selected_layer:
+        st.write(
+            f"Probe input: `{captured['input_shape']}` → "
+            f"selected output: `{captured['output_shape']}` "
+            "(batch, channels, height, width where applicable)."
+        )
+        map_data = captured["feature_map"]
+        if map_data is not None:
+            map_column, channel_column = st.columns((3, 2))
+            with map_column:
+                st.caption("First output channel (cropped to at most 32×32)")
+                st.plotly_chart(
+                    px.imshow(
+                        map_data,
+                        color_continuous_scale="Viridis",
+                        labels={"x": "Column", "y": "Row", "color": "Activation"},
+                    ),
+                    width="stretch",
+                    key="ch5_arch_feature_map",
+                )
+            with channel_column:
+                st.caption("Mean activation for the first output channels")
+                st.bar_chart(
+                    pd.DataFrame(
+                        {"Mean activation": captured["channel_means"]},
+                        index=[
+                            f"Channel {index}"
+                            for index in range(len(captured["channel_means"]))
+                        ],
+                    )
+                )
+
+
+def _render_convolution_simulator():
+    st.markdown("#### Depthwise vs. Standard Convolution Simulator")
+    control_columns = st.columns(4)
+    with control_columns[0]:
+        input_channels = st.slider(
+            "Input channels", 1, 64, 16, key="ch5_conv_input_channels"
+        )
+    with control_columns[1]:
+        output_channels = st.slider(
+            "Output channels", 1, 128, 32, key="ch5_conv_output_channels"
+        )
+    with control_columns[2]:
+        kernel_size = st.select_slider(
+            "Kernel size", options=[1, 3, 5, 7], value=3, key="ch5_conv_kernel"
+        )
+    with control_columns[3]:
+        image_side = st.select_slider(
+            "Feature-map side", options=[14, 28, 56, 112], value=28,
+            key="ch5_conv_image_side",
+        )
+
+    locations = image_side * image_side
+    standard_parameters = kernel_size**2 * input_channels * output_channels
+    depthwise_parameters = kernel_size**2 * input_channels
+    pointwise_parameters = input_channels * output_channels
+    standard_macs = locations * standard_parameters
+    depthwise_macs = locations * depthwise_parameters
+    pointwise_macs = locations * pointwise_parameters
+    separable_parameters = depthwise_parameters + pointwise_parameters
+    separable_macs = depthwise_macs + pointwise_macs
+
+    metrics = st.columns(3)
+    metrics[0].metric("Standard convolution parameters", f"{standard_parameters:,}")
+    metrics[1].metric(
+        "Depthwise + pointwise parameters", f"{separable_parameters:,}"
+    )
+    metrics[2].metric(
+        "Parameter reduction",
+        f"{(1 - separable_parameters / standard_parameters):.1%}"
+        if standard_parameters
+        else "0%",
+    )
+    st.write(
+        f"At **{image_side}×{image_side}** output locations, standard convolution "
+        f"uses **{standard_macs:,} MACs**; depthwise + pointwise uses "
+        f"**{separable_macs:,} MACs** "
+        f"({(1 - separable_macs / standard_macs):.1%} fewer)."
+    )
+    st.caption(
+        "Theoretical multiply-accumulate (MAC) counts assume stride 1, same-size "
+        "output, no bias, and one output channel count as configured. These are "
+        "formula-based operation counts, not measured latency."
+    )
+    st.code(
+        "Standard: K² × Cin × Cout\n"
+        "Depthwise: K² × Cin\n"
+        "Pointwise: Cin × Cout\n"
+        "MACs: output locations × parameters",
+        language="text",
+    )
+    stage = st.select_slider(
+        "Convolution animation stage",
+        options=[
+            "Input",
+            "Standard convolution",
+            "Depthwise convolution",
+            "Pointwise channel mixing",
+            "Output",
+        ],
+        value="Input",
+        key="ch5_conv_stage",
+    )
+    stage_details = {
+        "Input": (
+            f"{image_side}×{image_side}×{input_channels}",
+            "Feature map entering the layer",
+        ),
+        "Standard convolution": (
+            f"{standard_parameters:,} parameters",
+            f"{standard_macs:,} MACs · spatial and channel mixing together",
+        ),
+        "Depthwise convolution": (
+            f"{depthwise_parameters:,} parameters",
+            f"{depthwise_macs:,} MACs · one spatial filter per input channel",
+        ),
+        "Pointwise channel mixing": (
+            f"{pointwise_parameters:,} parameters",
+            f"{pointwise_macs:,} MACs · 1×1 filters mix channels",
+        ),
+        "Output": (
+            f"{image_side}×{image_side}×{output_channels}",
+            "Feature map leaving the layer",
+        ),
+    }
+    stage_columns = st.columns(5)
+    for column, (label, (shape_or_count, description)) in zip(
+        stage_columns, stage_details.items()
+    ):
+        active_class = "ch5-flow-active" if stage == label else ""
+        column.markdown(
+            f"<div class='ch5-flow-stage {active_class}'>"
+            f"<b>{label}</b><br>{shape_or_count}<br>{description}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_inverted_residual_visualizer():
+    st.markdown("#### Inverted Residual Block Visualizer")
+    controls = st.columns(4)
+    with controls[0]:
+        input_channels = st.slider(
+            "Block input channels", 8, 128, 32, step=8,
+            key="ch5_block_input_channels",
+        )
+    with controls[1]:
+        output_channels = st.slider(
+            "Block output channels", 8, 128, 32, step=8,
+            key="ch5_block_output_channels",
+        )
+    with controls[2]:
+        expansion = st.select_slider(
+            "Expansion factor", options=[1, 2, 3, 4, 6], value=6,
+            key="ch5_block_expansion",
+        )
+    with controls[3]:
+        spatial_side = st.select_slider(
+            "Input feature-map side", options=[14, 28, 56], value=28,
+            key="ch5_block_spatial",
+        )
+
+    expanded_channels = input_channels * expansion
+    residual = input_channels == output_channels
+    stages = [
+        ("Expansion (1×1)", input_channels, expanded_channels),
+        ("Depthwise (3×3)", expanded_channels, expanded_channels),
+        ("Linear projection (1×1)", expanded_channels, output_channels),
+    ]
+    selected_stage = st.select_slider(
+        "Step through the block",
+        options=[stage[0] for stage in stages] + ["Residual add"],
+        value="Expansion (1×1)",
+        key="ch5_block_stage",
+    )
+    active_channels = input_channels
+    if selected_stage != "Residual add":
+        _, _, active_channels = next(
+            stage for stage in stages if stage[0] == selected_stage
+        )
+    else:
+        active_channels = output_channels
+
+    stage_columns = st.columns(4)
+    for index, (label, channels_in, channels_out) in enumerate(stages):
+        active = selected_stage == label
+        stage_columns[index].markdown(
+            f"<div class='ch5-flow-stage {'ch5-flow-active' if active else ''}'>"
+            f"<b>{label}</b><br>{spatial_side}×{spatial_side}×{channels_in}"
+            f" → {spatial_side}×{spatial_side}×{channels_out}</div>",
+            unsafe_allow_html=True,
+        )
+    stage_columns[3].markdown(
+        "<div class='ch5-flow-stage "
+        + ("ch5-flow-active" if selected_stage == "Residual add" else "")
+        + "'><b>Residual add</b><br>"
+        + (
+            f"Input + projection → {spatial_side}×{spatial_side}×{output_channels}"
+            if residual
+            else "Skipped: input and output shapes differ"
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Selected stage operates on **{spatial_side}×{spatial_side}×"
+        f"{active_channels}** activations. The hidden expansion is "
+        f"{input_channels}×{expansion} = {expanded_channels} channels. "
+        + (
+            "A residual add is shape-compatible because input and output channels match."
+            if residual
+            else "No residual add: this block's input and output channel counts differ."
+        )
+    )
+
+
+def _render_mobilenet_inference_lab(model, preprocess, categories):
+    st.markdown("#### ImageNet Classification Lab")
+    if model is None or preprocess is None or categories is None:
+        st.warning(
+            "ImageNet inference needs the shared pretrained MobileNetV2, its "
+            "preprocessing transform, and ImageNet categories."
+        )
+        return
+
+    sample_directory = Path(__file__).resolve().parent.parent / "assets" / "images"
+    sample_options = {
+        label: sample_directory / filename
+        for label, filename in (
+            ("Dog", "dog.jpg"),
+            ("Masked dog", "dog_masked_test.jpg"),
+        )
+        if (sample_directory / filename).is_file()
+    }
+    if not sample_options:
+        st.warning("No sample images were found in assets/images.")
+        return
+
+    source_columns = st.columns((2, 3))
+    with source_columns[0]:
+        selected_sample = st.selectbox(
+            "Sample image",
+            list(sample_options),
+            key="ch5_inference_sample",
+        )
+        uploaded_file = st.file_uploader(
+            "Or upload an image",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="ch5_inference_upload",
+        )
+
+    if uploaded_file is not None:
+        image_bytes = uploaded_file.getvalue()
+        image = Image.open(uploaded_file).convert("RGB")
+        image_label = uploaded_file.name
+    else:
+        image_path = sample_options[selected_sample]
+        image_bytes = image_path.read_bytes()
+        with Image.open(image_path) as sample_image:
+            image = sample_image.convert("RGB")
+        image_label = selected_sample
+
+    with source_columns[1]:
+        st.image(image, caption=image_label, width="stretch")
+        st.markdown(
+            "**Pipeline:** image → pretrained transform → "
+            "MobileNetV2 → ImageNet class scores"
+        )
+        st.caption(
+            f"Original image: {image.width}×{image.height} RGB. "
+            "The shared pretrained model is used without training or weight updates."
+        )
+
+    import hashlib
+
+    image_key = hashlib.sha256(image_bytes).hexdigest()
+    if st.button(
+        "Run MobileNetV2 inference",
+        type="primary",
+        key="ch5_inference_run",
+    ):
+        input_tensor = preprocess(image).unsqueeze(0)
+        parameter = next(model.parameters())
+        input_tensor = input_tensor.to(device=parameter.device, dtype=parameter.dtype)
+        with torch.inference_mode():
+            logits = model(input_tensor)
+            probabilities = torch.nn.functional.softmax(logits[0], dim=0)
+            top_probabilities, top_indices = torch.topk(probabilities, 5)
+        st.session_state["ch5_inference_result"] = {
+            "image_key": image_key,
+            "tensor_shape": tuple(input_tensor.shape),
+            "predictions": [
+                (categories[int(index)], float(probability))
+                for probability, index in zip(
+                    top_probabilities.tolist(), top_indices.tolist()
+                )
+            ],
+        }
+
+    result = st.session_state.get("ch5_inference_result")
+    if result and result["image_key"] == image_key:
+        st.caption(
+            f"Preprocessed tensor shape: `{result['tensor_shape']}` "
+            "(batch, channels, height, width)."
+        )
+        for rank, (label, confidence) in enumerate(result["predictions"], start=1):
+            prediction_columns = st.columns((1, 4))
+            prediction_columns[0].write(f"**{rank}. {label}**")
+            prediction_columns[1].progress(confidence, text=f"{confidence:.2%}")
+
+
+def _render_model_comparison(model):
+    st.markdown("#### Lightweight Model Comparison")
+    from torchvision.models import MobileNet_V2_Weights, ResNet50_Weights
+
+    mobile_parameters = (
+        sum(parameter.numel() for parameter in model.parameters())
+        if model is not None
+        else MobileNet_V2_Weights.DEFAULT.meta["num_params"]
+    )
+    resnet_parameters = ResNet50_Weights.DEFAULT.meta["num_params"]
+    comparison = pd.DataFrame(
+        [
+            {
+                "Model": "MobileNetV2",
+                "Parameters": mobile_parameters,
+                "Published ops (GFLOPs)": MobileNet_V2_Weights.DEFAULT.meta["_ops"],
+                "Published checkpoint (MB)": MobileNet_V2_Weights.DEFAULT.meta[
+                    "_file_size"
+                ],
+            },
+            {
+                "Model": "ResNet50",
+                "Parameters": resnet_parameters,
+                "Published ops (GFLOPs)": ResNet50_Weights.DEFAULT.meta["_ops"],
+                "Published checkpoint (MB)": ResNet50_Weights.DEFAULT.meta[
+                    "_file_size"
+                ],
+            },
+        ]
+    )
+    st.dataframe(comparison, hide_index=True, width="stretch")
+    st.caption(
+        "Parameter counts are read from the live shared MobileNetV2 and "
+        "Torchvision's ResNet50 metadata. GFLOPs and checkpoint sizes are "
+        "published Torchvision weight metadata (224×224 input), not measurements "
+        "from this session."
+    )
+
+    if model is None:
+        st.info("Local latency comparison needs the shared MobileNetV2.")
+        return
+    if st.button(
+        "Measure local inference latency",
+        key="ch5_latency_run",
+    ):
+        import time
+        from torchvision.models import resnet50
+
+        parameter = next(model.parameters())
+        device = parameter.device
+        dtype = parameter.dtype
+        probe = torch.zeros((1, 3, 224, 224), device=device, dtype=dtype)
+        resnet = resnet50(weights=None).to(device=device, dtype=dtype).eval()
+        model.eval()
+
+        def measure_latency(target_model):
+            with torch.inference_mode():
+                target_model(probe)
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                durations = []
+                for _ in range(3):
+                    started = time.perf_counter()
+                    target_model(probe)
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    durations.append((time.perf_counter() - started) * 1000)
+            return float(np.median(durations))
+
+        latency_results = {
+            "MobileNetV2": measure_latency(model),
+            "ResNet50 (untrained weights)": measure_latency(resnet),
+            "device": str(device),
+        }
+        st.session_state["ch5_latency_results"] = latency_results
+        del resnet
+
+    latency_results = st.session_state.get("ch5_latency_results")
+    if latency_results:
+        measured_columns = st.columns(2)
+        measured_columns[0].metric(
+            "MobileNetV2 measured median",
+            f"{latency_results['MobileNetV2']:.2f} ms",
+        )
+        measured_columns[1].metric(
+            "ResNet50 measured median",
+            f"{latency_results['ResNet50 (untrained weights)']:.2f} ms",
+        )
+        st.caption(
+            f"Measured locally on {latency_results['device']} with batch size 1, "
+            "224×224 input, one warm-up pass, and the median of three timed "
+            "forward passes. ResNet50 uses untrained weights; this compares "
+            "execution cost, not prediction quality. Latency depends on hardware "
+            "and system load."
+        )
+
+
+def chapter_5(model=None, preprocess=None, categories=None):
     st.header("Chapter 5: Meet MobileNetV2")
+    st.markdown(
+        """
+        <style>
+        .ch5-flow-stage {
+            min-height: 76px;
+            padding: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 10px;
+            background: rgba(30, 41, 59, 0.58);
+            transition: border-color 180ms ease, background-color 180ms ease,
+                        transform 180ms ease;
+        }
+        .ch5-flow-active {
+            border-color: #38bdf8;
+            background: rgba(14, 116, 144, 0.28);
+            transform: translateY(-2px);
+        }
+        @media (max-width: 720px) {
+            .ch5-flow-stage { min-height: 64px; padding: 9px; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("""
     ### 5.1 Why MobileNetV2?
     Many deep learning models (like ResNet or VGG) are massive, requiring gigabytes of RAM and powerful GPUs to run. **MobileNetV2** was specifically designed by Google to run on mobile phones and lightweight CPUs (like the one running this application).
-    
+    """)
+    _render_mobilenet_architecture_explorer(model)
+    _render_model_comparison(model)
+    _render_inverted_residual_visualizer()
+    render_knowledge_check(
+        "ch5_q_architecture",
+        "Why does an inverted residual block expand channels before depthwise filtering?",
+        [
+            "To create a higher-dimensional space for efficient feature filtering.",
+            "To make every feature map larger in width and height.",
+            "To remove the need for learned weights.",
+        ],
+        0,
+        "The expansion layer temporarily increases channels so depthwise filtering can process richer features before a compact linear projection.",
+    )
+
+    st.markdown("""
     ### 5.2 Depthwise Separable Convolutions
     Standard convolution is computationally expensive because it mixes spatial data (pixels) and channel data (RGB) all at once. MobileNetV2 uses a trick:
     1. **Depthwise Convolution:** It filters each color channel separately.
     2. **Pointwise Convolution:** It then uses a 1x1 filter to mix the channels together.
     This drastic reduction in multiplication operations is what makes the model so fast!
-    
+    """)
+    _render_convolution_simulator()
+    render_knowledge_check(
+        "ch5_q1",
+        "Why is MobileNetV2 able to run so fast on a standard CPU?",
+        [
+            "It uses low-resolution black and white images only.",
+            "It uses Depthwise Separable Convolutions to drastically reduce the number of mathematical operations.",
+            "It only knows 10 object classes instead of 1000.",
+        ],
+        1,
+        "By separating spatial filtering from channel mixing, MobileNetV2 achieves high accuracy with a fraction of the compute cost.",
+    )
+
+    st.markdown("""
     ### 5.3 The ImageNet Dataset
     MobileNetV2 was trained on **ImageNet**, a famous dataset containing over 1.2 million images mapped to exactly 1,000 specific classes (like 'Samoyed', 'Keyboard', or 'Tench fish'). Our model can *only* predict these 1,000 things. If you upload a picture of a Pikachu, the model physically cannot output "Pikachu"—it will guess whatever ImageNet class looks most similar.
     """)
-    render_knowledge_check("ch5_q1", "Why is MobileNetV2 able to run so fast on a standard CPU?", 
-        ["It uses low-resolution black and white images only.", "It uses Depthwise Separable Convolutions to drastically reduce the number of mathematical operations.", "It only knows 10 object classes instead of 1000."], 1, 
-        "By separating spatial filtering from channel mixing, MobileNetV2 achieves high accuracy with a fraction of the compute cost.")
+    _render_mobilenet_inference_lab(model, preprocess, categories)
+    render_knowledge_check(
+        "ch5_q_imagenet",
+        "What happens if you provide a pretrained ImageNet model with an object outside its 1,000 classes?",
+        [
+            "It adds a new class automatically.",
+            "It returns the closest-scoring class from the classes it learned.",
+            "It retrains itself on the uploaded image.",
+        ],
+        1,
+        "The classifier can only score the 1,000 classes in its ImageNet label set; uploading an image does not add classes or retrain the model.",
+    )
 
 def chapter_6():
     st.header("Chapter 6: How Masking Changes a Prediction")
@@ -1131,7 +1959,11 @@ def render_academy_page(model=None, preprocess=None, categories=None):
         ),
         "3. Understanding CNNs": chapter_3,
         "4. Image Classification": chapter_4,
-        "5. Meet MobileNetV2": chapter_5,
+        "5. Meet MobileNetV2": lambda: chapter_5(
+            model=model,
+            preprocess=preprocess,
+            categories=categories,
+        ),
         "6. Masking & Predictions": chapter_6,
         "7. The AI X-Ray Math": chapter_7,
         "8. Conducting Valid Experiments": chapter_8,
