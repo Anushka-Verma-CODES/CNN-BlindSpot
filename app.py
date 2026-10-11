@@ -30,7 +30,7 @@ if 'exp_log' not in st.session_state:
     st.session_state.exp_log = create_empty_log()
 
 def render_lab():
-    st.title("👁️ CNN Blind Spot: Interactive Lab")
+    st.title("CNN Blind Spot: Interactive Lab")
     
     missions = get_missions()
     current_mission = missions[st.session_state.mission_idx] if st.session_state.mission_idx < len(missions) else None
@@ -50,8 +50,8 @@ def render_lab():
         if current_mission:
             st.subheader(f"Mission {current_mission.id}: {current_mission.title}")
             st.info(current_mission.description)
-            st.markdown(f"**🎯 Learning Objective:** {current_mission.learning_objective}")
-            st.markdown(f"**📚 Related Theory:** {current_mission.chapter_link}")
+            st.markdown(f"** Learning Objective:** {current_mission.learning_objective}")
+            st.markdown(f"** Related Theory:** {current_mission.chapter_link}")
             if current_mission.max_moves:
                 st.write(f"**Moves Used:** {move_count} / {current_mission.max_moves}")
             else:
@@ -155,7 +155,7 @@ def render_lab():
     st.dataframe(st.session_state.exp_log, use_container_width=True)
     if not st.session_state.exp_log.empty:
         csv_data = convert_df_to_csv(st.session_state.exp_log)
-        st.download_button(label="📥 Download CSV", data=csv_data, file_name="cnn_experiment_log.csv", mime="text/csv")
+        st.download_button(label="Download CSV", data=csv_data, file_name="cnn_experiment_log.csv", mime="text/csv")
 
 def render_assessment():
     st.title("🎓 Final Assessment")

@@ -1,10 +1,141 @@
+from functools import partial
+
 import streamlit as st
 import numpy as np
+import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from PIL import Image, UnidentifiedImageError
+
+
+def _sync_tensor_cell_selection(widget_key, selection_key, row_start, column_start):
+    grid_state = st.session_state.get(widget_key)
+    if grid_state is None:
+        return
+
+    selected_cells = grid_state.selection.cells
+    if selected_cells:
+        selected_cell = selected_cells[0]
+        st.session_state[selection_key] = (
+            row_start + selected_cell["row"],
+            column_start + selected_cell["column"],
+        )
+
+
+def _tensor_cell_style(value):
+    intensity = int(value)
+    text_color = "#111827" if intensity >= 145 else "#f8fafc"
+    return (
+        f"background-color: rgb({intensity}, {intensity}, {intensity}); "
+        f"color: {text_color};"
+    )
+
+
+def _render_tensor_matrix(
+    tensor_channel,
+    channel_label,
+    image_id,
+    selection_key,
+    region_size,
+    row_start,
+    column_start,
+    zoom,
+    show_values,
+):
+    height, width = tensor_channel.shape
+    visible_rows = min(region_size, height - row_start)
+    visible_columns = min(region_size, width - column_start)
+    matrix = tensor_channel[
+        row_start : row_start + visible_rows,
+        column_start : column_start + visible_columns,
+    ]
+    matrix_frame = pd.DataFrame(
+        matrix,
+        index=np.arange(row_start, row_start + visible_rows),
+        columns=np.arange(column_start, column_start + visible_columns),
+    )
+    matrix_frame.index.name = "row"
+    matrix_frame.columns.name = "column"
+
+    widget_key = (
+        f"tensor_grid_{image_id}_{channel_label}_{region_size}_"
+        f"{row_start}_{column_start}"
+    )
+    selected_row, selected_column = st.session_state.get(
+        selection_key, (row_start, column_start)
+    )
+    selected_in_region = (
+        row_start <= selected_row < row_start + visible_rows
+        and column_start <= selected_column < column_start + visible_columns
+    )
+    cell_styles = pd.DataFrame("", index=matrix_frame.index, columns=matrix_frame.columns)
+    if selected_in_region:
+        cell_styles.loc[selected_row, selected_column] = (
+            "border: 2px solid #facc15 !important; "
+            "box-shadow: inset 0 0 0 2px #facc15;"
+        )
+
+    styled_matrix = (
+        matrix_frame.style
+        .map(_tensor_cell_style)
+        .apply(lambda _: cell_styles, axis=None)
+        .format(lambda value: str(int(value)) if show_values else "")
+        .set_properties(
+            **{
+                "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+                "font-size": f"{round(12 * zoom)}px",
+                "min-width": f"{round(44 * zoom)}px",
+                "text-align": "center",
+                "border": "1px solid #46505e",
+                "padding": f"{round(4 * zoom)}px",
+            }
+        )
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#202733"),
+                        ("color", "#e5e7eb"),
+                        ("font-family", "ui-monospace, monospace"),
+                        ("text-align", "center"),
+                        ("border", "1px solid #46505e"),
+                    ],
+                }
+            ]
+        )
+    )
+    st.dataframe(
+        styled_matrix,
+        width="stretch",
+        height=min(680, max(220, 90 + visible_rows * round(30 * zoom))),
+        row_height=round(30 * zoom),
+        hide_index=False,
+        key=widget_key,
+        on_select=partial(
+            _sync_tensor_cell_selection,
+            widget_key,
+            selection_key,
+            row_start,
+            column_start,
+        ),
+        selection_mode="single-cell",
+    )
+
+    selected_row, selected_column = st.session_state.get(
+        selection_key, (row_start, column_start)
+    )
+    if 0 <= selected_row < height and 0 <= selected_column < width:
+        st.info(
+            f"Selected {channel_label} cell — row **{selected_row}**, "
+            f"column **{selected_column}**, intensity **"
+            f"{int(tensor_channel[selected_row, selected_column])}**."
+        )
+
 
 def render_knowledge_check(key, question, options, correct_idx, explanation):
     st.markdown("---")
-    st.write(f"**🧠 Knowledge Check:** {question}")
+    st.write(f"**Knowledge Check:** {question}")
     state_key = f"quiz_{key}"
     if state_key not in st.session_state:
         st.session_state[state_key] = None
@@ -40,7 +171,318 @@ def chapter_1():
     b = c3.slider("Blue (0-255)", 0, 255, 0)
     color_hex = f"#{r:02x}{g:02x}{b:02x}"
     st.markdown(f'<div style="background-color: {color_hex}; height: 80px; border-radius: 8px; border: 1px solid #555;"></div>', unsafe_allow_html=True)
-    
+
+    st.markdown("#### Interactive Demo: Image to Tensor")
+    st.write(
+        "Upload an image to explore its pixel values in an interactive tensor "
+        "matrix, with a synchronized grayscale heatmap or 3D RGB visualization."
+    )
+    uploaded_image = st.file_uploader(
+        "Choose an image",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="chapter_1_image",
+    )
+    tensor_mode = st.radio(
+        "Tensor color mode",
+        ["RGB", "Grayscale"],
+        horizontal=True,
+        key="chapter_1_tensor_mode",
+    )
+
+    if uploaded_image is not None:
+        try:
+            with Image.open(uploaded_image) as image:
+                image_tensor = np.asarray(
+                    image.convert("RGB" if tensor_mode == "RGB" else "L"),
+                    dtype=np.uint8,
+                )
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+            st.error(f"Could not read the uploaded image: {exc}")
+        else:
+            height, width = image_tensor.shape[:2]
+            image_id = uploaded_image.file_id
+            selection_key = f"tensor_selected_{image_id}"
+            st.session_state.setdefault(selection_key, (0, 0))
+            selected_row, selected_column = st.session_state[selection_key]
+            selected_row = min(max(selected_row, 0), height - 1)
+            selected_column = min(max(selected_column, 0), width - 1)
+            st.session_state[selection_key] = (selected_row, selected_column)
+
+            st.markdown("##### Tensor metadata")
+            metadata_columns = st.columns(3)
+            metadata_columns[0].metric("Full tensor shape", str(image_tensor.shape))
+            metadata_columns[1].metric("Dimensions", f"{height} × {width}")
+            metadata_columns[2].metric("Data type", str(image_tensor.dtype))
+            metadata_columns = st.columns(3)
+            metadata_columns[0].metric("Elements", f"{image_tensor.size:,}")
+            metadata_columns[1].metric(
+                "Channels", "3 (R, G, B)" if tensor_mode == "RGB" else "1 (grayscale)"
+            )
+            metadata_columns[2].metric(
+                "Intensity range",
+                f"{int(image_tensor.min())}–{int(image_tensor.max())}",
+            )
+            st.caption(
+                "Metadata describes the full uploaded tensor. The matrix below "
+                "shows only the selected region."
+            )
+
+            matrix_controls = st.columns([1, 1, 1, 1])
+            with matrix_controls[0]:
+                region_size = st.selectbox(
+                    "Matrix region",
+                    [8, 16, 32],
+                    index=1,
+                    format_func=lambda size: f"{size} × {size}",
+                    key=f"tensor_region_{image_id}",
+                )
+            with matrix_controls[1]:
+                zoom = st.select_slider(
+                    "Cell zoom",
+                    options=[1.0, 1.25, 1.5, 2.0],
+                    value=1.25,
+                    key=f"tensor_zoom_{image_id}",
+                )
+            with matrix_controls[2]:
+                show_values = st.toggle(
+                    "Show values",
+                    value=True,
+                    key=f"tensor_values_{image_id}",
+                )
+
+            max_row_start = max(0, height - region_size)
+            max_column_start = max(0, width - region_size)
+            start_controls = st.columns(2)
+            with start_controls[0]:
+                if max_row_start:
+                    row_start = st.slider(
+                        "Starting row",
+                        min_value=0,
+                        max_value=max_row_start,
+                        value=0,
+                        key=f"tensor_row_start_{image_id}_{region_size}",
+                    )
+                else:
+                    row_start = 0
+                    st.caption("Starting row: 0")
+            with start_controls[1]:
+                if max_column_start:
+                    column_start = st.slider(
+                        "Starting column",
+                        min_value=0,
+                        max_value=max_column_start,
+                        value=0,
+                        key=f"tensor_column_start_{image_id}_{region_size}",
+                    )
+                else:
+                    column_start = 0
+                    st.caption("Starting column: 0")
+
+            image_column, tensor_column = st.columns([0.9, 1.5], gap="large")
+            with image_column:
+                st.markdown("**Uploaded image**")
+                preview_scale = min(1.0, 512 / max(height, width))
+                preview_width = max(1, round(width * preview_scale))
+                preview_height = max(1, round(height * preview_scale))
+                preview_image = np.asarray(
+                    Image.fromarray(image_tensor).resize(
+                        (preview_width, preview_height),
+                        Image.Resampling.BILINEAR,
+                    )
+                )
+                image_figure = go.Figure(go.Image(z=preview_image))
+                image_figure.add_trace(
+                    go.Scatter(
+                        x=[(selected_column + 0.5) * preview_width / width - 0.5],
+                        y=[(selected_row + 0.5) * preview_height / height - 0.5],
+                        mode="markers",
+                        marker={
+                            "symbol": "circle-open",
+                            "size": 16,
+                            "color": "#facc15",
+                            "line": {"color": "#facc15", "width": 3},
+                        },
+                        hovertemplate=(
+                            f"row: {selected_row}<br>column: {selected_column}"
+                            "<extra>Selected pixel</extra>"
+                        ),
+                        showlegend=False,
+                    )
+                )
+                image_figure.update_layout(
+                    height=460,
+                    margin={"l": 0, "r": 0, "t": 10, "b": 10},
+                    xaxis={"title": "Column", "constrain": "domain"},
+                    yaxis={
+                        "title": "Row",
+                        "autorange": "reversed",
+                        "scaleanchor": "x",
+                    },
+                    uirevision=f"image-{image_id}",
+                )
+                st.plotly_chart(
+                    image_figure,
+                    width="stretch",
+                    key=f"uploaded_preview_{image_id}",
+                )
+            with tensor_column:
+                st.markdown("### Tensor matrix")
+                visible_rows = min(region_size, height - row_start)
+                visible_columns = min(region_size, width - column_start)
+                st.caption(
+                    f"Selected region: {visible_rows} × {visible_columns} pixels "
+                    f"(rows {row_start}–{row_start + visible_rows - 1}, columns "
+                    f"{column_start}–{column_start + visible_columns - 1}); "
+                    f"full tensor shape: `{image_tensor.shape}`."
+                )
+                st.caption(
+                    "Select any grid cell to highlight it in the heatmap and "
+                    "uploaded image. Use the sliders to pan the matrix."
+                )
+                if tensor_mode == "Grayscale":
+                    _render_tensor_matrix(
+                        image_tensor,
+                        "grayscale",
+                        image_id,
+                        selection_key,
+                        region_size,
+                        row_start,
+                        column_start,
+                        zoom,
+                        show_values,
+                    )
+                else:
+                    red_tab, green_tab, blue_tab = st.tabs(
+                        ["Red (R)", "Green (G)", "Blue (B)"]
+                    )
+                    for tab, channel_index, channel_label in (
+                        (red_tab, 0, "red"),
+                        (green_tab, 1, "green"),
+                        (blue_tab, 2, "blue"),
+                    ):
+                        with tab:
+                            _render_tensor_matrix(
+                                image_tensor[:, :, channel_index],
+                                channel_label,
+                                image_id,
+                                selection_key,
+                                region_size,
+                                row_start,
+                                column_start,
+                                zoom,
+                                show_values,
+                            )
+
+                st.markdown("### Tensor heatmap")
+                if tensor_mode == "Grayscale":
+                    heatmap_stride = max(
+                        1, int(np.ceil(max(height, width) / 512))
+                    )
+                    heatmap = image_tensor[::heatmap_stride, ::heatmap_stride]
+                    heatmap_rows = np.arange(0, height, heatmap_stride)
+                    heatmap_columns = np.arange(0, width, heatmap_stride)
+                    figure = go.Figure(
+                        go.Heatmap(
+                            z=heatmap,
+                            x=heatmap_columns,
+                            y=heatmap_rows,
+                            colorscale="Gray",
+                            zmin=0,
+                            zmax=255,
+                            colorbar={"title": "Intensity (0–255)"},
+                            hovertemplate=(
+                                "row: %{y}<br>column: %{x}"
+                                "<br>intensity: %{z}<extra></extra>"
+                            ),
+                        )
+                    )
+                    figure.add_trace(
+                        go.Scatter(
+                            x=[selected_column],
+                            y=[selected_row],
+                            mode="markers",
+                            marker={
+                                "symbol": "square-open",
+                                "size": 14,
+                                "color": "#facc15",
+                                "line": {"color": "#facc15", "width": 3},
+                            },
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
+                    figure.update_layout(
+                        xaxis_title="Column",
+                        yaxis_title="Row",
+                        yaxis_autorange="reversed",
+                        height=560,
+                        margin={"l": 20, "r": 20, "t": 15, "b": 30},
+                        uirevision=f"gray-heatmap-{image_id}",
+                    )
+                else:
+                    flat_tensor = image_tensor.reshape(-1, 3)
+                    max_points = 5000
+                    stride = max(1, int(np.ceil(len(flat_tensor) / max_points)))
+                    sampled_pixels = flat_tensor[::stride]
+                    pixel_indices = np.arange(0, len(flat_tensor), stride)
+                    pixel_colors = [
+                        f"rgb({red},{green},{blue})"
+                        for red, green, blue in sampled_pixels
+                    ]
+                    figure = go.Figure(
+                        go.Scatter3d(
+                            x=sampled_pixels[:, 0],
+                            y=sampled_pixels[:, 1],
+                            z=sampled_pixels[:, 2],
+                            mode="markers",
+                            marker={"size": 3, "color": pixel_colors, "opacity": 0.8},
+                            customdata=np.column_stack(
+                                (pixel_indices // width, pixel_indices % width)
+                            ),
+                            hovertemplate=(
+                                "row: %{customdata[0]}<br>column: %{customdata[1]}"
+                                "<br>R: %{x}<br>G: %{y}<br>B: %{z}<extra></extra>"
+                            ),
+                        )
+                    )
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[int(image_tensor[selected_row, selected_column, 0])],
+                            y=[int(image_tensor[selected_row, selected_column, 1])],
+                            z=[int(image_tensor[selected_row, selected_column, 2])],
+                            mode="markers",
+                            marker={
+                                "symbol": "diamond",
+                                "size": 9,
+                                "color": "#facc15",
+                                "line": {"color": "#111827", "width": 2},
+                            },
+                            hovertemplate=(
+                                f"row: {selected_row}<br>column: {selected_column}"
+                                "<br>Selected pixel<extra></extra>"
+                            ),
+                            showlegend=False,
+                        )
+                    )
+                    figure.update_layout(
+                        scene={
+                            "xaxis_title": "Red",
+                            "yaxis_title": "Green",
+                            "zaxis_title": "Blue",
+                            "xaxis_range": [0, 255],
+                            "yaxis_range": [0, 255],
+                            "zaxis_range": [0, 255],
+                        },
+                        height=560,
+                        margin={"l": 0, "r": 0, "t": 15, "b": 10},
+                        uirevision=f"rgb-heatmap-{image_id}",
+                    )
+                st.plotly_chart(
+                    figure,
+                    width="stretch",
+                    key=f"tensor_heatmap_{image_id}_{tensor_mode}",
+                )
+
     st.markdown("""
     ### 1.2 The Preprocessing Pipeline
     Neural networks are rigid mathematical functions. They cannot dynamically adjust to images of random sizes. Furthermore, feeding numbers as large as 255 into complex calculus equations causes a problem called "exploding gradients," where the math breaks down.
